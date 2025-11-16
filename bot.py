@@ -1,5 +1,6 @@
 # bot.py
-from telegram import Update, ReplyKeyboardMarkup
+from flask import Flask, request
+from telegram import Update, Bot, ReplyKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, ContextTypes,
     MessageHandler, filters
@@ -12,6 +13,13 @@ from datetime import datetime, timedelta
 # -------------------------------------------------
 # Database yaratish
 database.init_db()
+
+# -------------------------------------------------
+# Flask app (Render uchun)
+app = Flask(__name__)
+TOKEN = config.TOKEN
+bot = Bot(TOKEN)
+application = Application.builder().token(TOKEN).bot(bot).build()
 
 # -------------------------------------------------
 # O‘zbekcha tugmalar
@@ -148,6 +156,16 @@ async def done_task_from_text(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
 # -------------------------------------------------
+# Fon rejimida esdalatma yuborish
+async def send_reminder_later(bot, chat_id, message, delay):
+    await asyncio.sleep(delay)
+    await bot.send_message(
+        chat_id=chat_id,
+        text=f"🔔 *ESDALATMA!*\n{message}",
+        parse_mode='Markdown'
+    )
+
+# -------------------------------------------------
 # /remind
 async def remind_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 2:
@@ -178,17 +196,13 @@ async def remind_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     delay = (remind_time - now).total_seconds()
     await update.message.reply_text(
-        f"⏰ *Esdalatma:* {time_str} → {message}",
+        f"⏰ *Esdalatma o'rnatildi:* {time_str} → {message}",
         parse_mode='Markdown',
         reply_markup=get_main_menu()
     )
 
-    await asyncio.sleep(delay)
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=f"🔔 *ESDALATMA!*\n{message}",
-        parse_mode='Markdown'
-    )
+    # FON REJIMIDA
+    asyncio.create_task(send_reminder_later(context.bot, update.effective_chat.id, message, delay))
 
 # -------------------------------------------------
 # /motiv
@@ -285,24 +299,29 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 # -------------------------------------------------
-# Main
-def main():
-    app = Application.builder().token(config.TOKEN).build()
+# Handlerlarni qo‘shish
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("add", add_task))
+application.add_handler(CommandHandler("list", list_tasks))
+application.add_handler(CommandHandler("done", done_task))
+application.add_handler(CommandHandler("remind", remind_task))
+application.add_handler(CommandHandler("motiv", motiv))
+application.add_handler(CommandHandler("stats", stats))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # Buyruqlar
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("add", add_task))
-    app.add_handler(CommandHandler("list", list_tasks))
-    app.add_handler(CommandHandler("done", done_task))
-    app.add_handler(CommandHandler("remind", remind_task))
-    app.add_handler(CommandHandler("motiv", motiv))
-    app.add_handler(CommandHandler("stats", stats))
+# -------------------------------------------------
+# Webhook endpoint
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    update = Update.de_json(request.get_json(), bot)
+    if update:
+        asyncio.run(application.process_update(update))
+    return 'OK', 200
 
-    # Tugma matnlari
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    print("Bot ishga tushdi... (Ctrl+C to‘xtatish)")
-    app.run_polling()
-
+# -------------------------------------------------
+# Serverni ishga tushirish (Render uchun)
 if __name__ == '__main__':
-    main()
+    import os
+    port = int(os.environ.get('PORT', 5000))
+    print(f"Bot ishga tushdi... Port: {port}")
+    app.run(host='0.0.0.0', port=port)
